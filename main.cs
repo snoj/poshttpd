@@ -8,19 +8,28 @@ using System.Threading;
 namespace DotHttpd {
 	public class Program {
 		public static void Main(string[] args) {
-			Console.WriteLine("dotHttpd");
+			Console.WriteLine("Starting poshttpd...");
+			
 			BG main = new BG();
+			string conffile = @".\poshttpd.config";
+			if(System.IO.File.Exists(args[0])) {
+				conffile = args[0];
+				
+			}
+			
+			main = new BG(conffile);
 			main.Start();
 			
 		}
 	}
 	
 	public class HLState {
-		
+		public readonly Guid ID = Guid.NewGuid();
 	}
 	
 	public class BG {
 		public string prefix = "http://+:81/";
+		string rootDir;
 		HttpListener _listener = new HttpListener();
 		Thread t;
 		int asyncLimit = 5;
@@ -33,8 +42,15 @@ namespace DotHttpd {
 			this.t = new Thread(new ThreadStart(this.Looper));
 			
 			this.plugins.Add(".ps1", new PS());
-			this.plugins.Add(".psweb", new PS());
 			this.plugins.Add("*", new PassThru());
+		}
+		
+		public BG(string conffile) : this() {
+			System.Xml.XmlDocument xmld = new System.Xml.XmlDocument();
+			xmld.Load(conffile);
+			this.prefix = xmld.SelectSingleNode("/root/instance/prefix").Attributes["val"].Value.ToString();
+			this.rootDir = xmld.SelectSingleNode("/root/instance/rootDir").Attributes["val"].Value.ToString();
+			Path.rootDir = this.rootDir;
 		}
 		
 		public void Looper() {
@@ -56,7 +72,7 @@ namespace DotHttpd {
 				
 				
 				HLState state = new HLState();
-				
+				//Console.WriteLine("creating HLState.ID: {0}", state.ID);
 				
 				//_listener.GetContext()
 				try {
@@ -72,15 +88,16 @@ namespace DotHttpd {
 				}
 			}
 		}
+		
 		protected void cb(HttpListenerContext con) {
-			Console.WriteLine("Request Trace ID: {0}", con.Request.RequestTraceIdentifier);
+			//Console.WriteLine("Request Trace ID: {0}", con.Request.RequestTraceIdentifier);
 			PassThru pt = new PassThru();
-			System.IO.Stream s = (System.IO.Stream)new System.IO.MemoryStream(0);
+			EngineResult s ;//= (System.IO.Stream)new System.IO.MemoryStream(0);
 			
 			System.IO.FileInfo f = Path.getABSPath(con.Request.RawUrl);
 			
 			try {
-				Console.WriteLine("Attempting to use engine {0}|{1}...", f.Extension, this.plugins[f.Extension].GetType().Name);
+				//Console.WriteLine("Attempting to use engine {0}|{1}...", f.Extension, this.plugins[f.Extension].GetType().Name);
 				s = this.plugins[f.Extension].run(con);
 			} catch {
 				Console.WriteLine("No luck, using default.");
@@ -88,24 +105,28 @@ namespace DotHttpd {
 			}
 			
 			try {
-				Console.WriteLine("Content: {0}\r\nLength: {1}", con.Request.RawUrl, s.Length);
-				con.Response.ContentLength64 = s.Length;
-				while(s.Position < s.Length) {
+				Console.WriteLine("Content: {0}\r\nLength: {1}", con.Request.RawUrl, s.output.Length);
+				con.Response.StatusCode = s.ResponseCode;
+				con.Response.ContentLength64 = s.output.Length;
+				while(s.output.Position < s.output.Length) {
 					byte[] buf = new byte[1024];
-					int bRead = s.Read(buf, 0, buf.Length);
+					int bRead = s.output.Read(buf, 0, buf.Length);
 					con.Response.OutputStream.Write(buf, 0, bRead);
 				}
 			} catch(Exception e) {
-				Console.WriteLine(e);
+				con.Response.StatusCode = 500;
+				//Console.WriteLine(e);
 			}
 			finally {
-				s.Close();
+				Console.WriteLine("{0} - {1} {2} {3}", DateTime.Now, con.Response.StatusCode, con.Request.HttpMethod, con.Request.RawUrl);
+				s.output.Close();
 				con.Response.Close();
+				
 			}
 		}
 		protected void cb(IAsyncResult result) {
 			HttpListenerContext con = _listener.EndGetContext(result);
-			
+			//Console.WriteLine("CB HLState.ID: {0}", ((HLState)result.AsyncState).ID);
 			cb(con);
 		}
 		
@@ -122,8 +143,9 @@ namespace DotHttpd {
 	
 	#region tools
 	
+	//TODO: rewrite some of this using http://msdn.microsoft.com/en-us/library/system.uri.localpath.aspx as a base.
 	class Path {
-		public static string rootDir = @"c:\users\snoj\documents\projects\poshttpd\sites\";
+		public static string rootDir = "";
 		
 		static System.IO.FileInfo getPath(string RawUrl) {
 			string fp = RawUrl;
@@ -158,16 +180,22 @@ namespace DotHttpd {
 	
 	#region engines
 	public interface IEngine {
-		System.IO.Stream run(HttpListenerContext context);
+		EngineResult run(HttpListenerContext context);
 		//HttpListenerResponse getResponse();
 	}
+	
+	public class EngineResult {
+		public System.IO.Stream output = (System.IO.Stream)new System.IO.MemoryStream(0);
+		public int ResponseCode = 200;
+	}
+	
 	///<Summary>
 	///
 	///</Summary>
 	public class PS : IEngine {
-		string rootDir = @"c:\users\snoj\documents\projects\poshttpd\sites\";
+		string rootDir = @"";
 		//HttpListenerResponse nresponse;
-		public System.IO.Stream run(HttpListenerContext context) {
+		public EngineResult run(HttpListenerContext context) {
 			try {
 				PowerShell shell = PowerShell.Create();
 				
@@ -200,12 +228,19 @@ namespace DotHttpd {
 				}
 				ms.Seek(0, System.IO.SeekOrigin.Begin);
 				
-				return (System.IO.Stream)ms;
+				//return (System.IO.Stream)ms;
+				return new EngineResult() {
+					output = (System.IO.Stream)ms,
+					ResponseCode = 200
+				};
 			} catch(Exception e) {
-				Console.WriteLine(e);
+				//Console.WriteLine(e);
 			}
 			
-			return (System.IO.Stream)new System.IO.MemoryStream(0);
+			return new EngineResult() {
+				output = (System.IO.Stream)new System.IO.MemoryStream(0),
+				ResponseCode = 404
+			};
 		}
 		
 		/*public HttpListenerResponse getResponse(){
@@ -218,28 +253,38 @@ namespace DotHttpd {
 	/// Useful for static things like HTML files, images, and the like.
 	///</Summary>
 	public class PassThru : IEngine {
-		string rootDir = @"c:\users\snoj\documents\projects\poshttpd\sites\";
+		string rootDir = @"";
 		//HttpListenerResponse nresponse;
-		public System.IO.Stream run(HttpListenerContext context) {
+		public EngineResult run(HttpListenerContext context) {
 			Console.WriteLine(context.Request.RawUrl);
 			//this.nresponse = context.Response;
-			string fp = context.Request.RawUrl;
+			/*string fp = context.Request.RawUrl;
 			if(fp.Contains("?")) {
 				fp = fp.Substring(0, fp.IndexOf("?"));
-			}
+			}*/
 			
-			string absfp = System.IO.Path.Combine(new string[] { this.rootDir, fp.Trim('/') });
+			string absfp = Path.getABSPath(context.Request.RawUrl).FullName; //System.IO.Path.Combine(new string[] { this.rootDir, fp.Trim('/') });
 			//Console.WriteLine("Checking {0}", absfp);
 			if(System.IO.File.Exists(absfp)) {
 				try {
 					//Console.WriteLine("Opening {0}", absfp);
-					return (System.IO.Stream)new System.IO.FileStream(absfp, System.IO.FileMode.Open, System.IO.FileAccess.Read);
+					//return (System.IO.Stream)new System.IO.FileStream(absfp, System.IO.FileMode.Open, System.IO.FileAccess.Read);
+					return new EngineResult() {
+						output = (System.IO.Stream)new System.IO.FileStream(absfp, System.IO.FileMode.Open, System.IO.FileAccess.Read),
+						ResponseCode = 200
+					};
 				} catch(Exception e) {
-					return (System.IO.Stream)new System.IO.MemoryStream(0);
+					return new EngineResult() {
+						output = (System.IO.Stream)new System.IO.MemoryStream(0),
+						ResponseCode = 404
+					};
 				}
 			}
 			
-			return (System.IO.Stream)new System.IO.MemoryStream(0);
+			return new EngineResult() {
+				output = (System.IO.Stream)new System.IO.MemoryStream(0),
+				ResponseCode = 404
+			};
 		}
 		
 		

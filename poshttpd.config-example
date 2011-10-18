@@ -1,0 +1,14 @@
+﻿<?xml version="1.0"?>
+<root>
+	<instance>
+		<prefix val="http://+:81/" />
+		<rootDir val="c:\poshsite" />
+		<alias url="/test" dir="c:\poshsite\some\other\dir" />
+		<opt key="DefaultFile" val="index.ps1" />
+	</instance>
+	<engines>
+		<!--These are always assumed to be enabled.
+		<engine name="PowerShell" />
+		<engine name="PassThru" /> -->
+	</engines>
+</root>

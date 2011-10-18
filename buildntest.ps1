@@ -10,7 +10,7 @@ try {
     
     $tmp | Select-String error | %{ throw "errors!"; }
 
-    & ("{0}\poshttpd.exe" -f $basePath) -t eth0;
+    & ("{0}\poshttpd.exe" -f $basePath) .\poshttpd.config -t eth0 ;
 } catch {
     
 }
