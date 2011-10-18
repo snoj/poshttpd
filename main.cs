@@ -118,7 +118,7 @@ namespace DotHttpd {
 				//Console.WriteLine(e);
 			}
 			finally {
-				Console.WriteLine("{0} - {1} {2} {3}", DateTime.Now, con.Response.StatusCode, con.Request.HttpMethod, con.Request.RawUrl);
+				Console.WriteLine("{0} - - [{1}] {2} {3} {4}", con.Request.RemoteEndPoint.ToString(), DateTime.Now, con.Response.StatusCode, con.Request.HttpMethod, con.Request.RawUrl);
 				s.output.Close();
 				con.Response.Close();
 				
