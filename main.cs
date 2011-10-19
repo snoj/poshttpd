@@ -4,6 +4,7 @@ using System.Linq;
 using System.Management.Automation;
 using System.Net;
 using System.Threading;
+using System.Xml;
 
 namespace DotHttpd {
 	public class Program {
@@ -51,6 +52,24 @@ namespace DotHttpd {
 			this.prefix = xmld.SelectSingleNode("/root/instance/prefix").Attributes["val"].Value.ToString();
 			this.rootDir = xmld.SelectSingleNode("/root/instance/rootDir").Attributes["val"].Value.ToString();
 			Path.rootDir = this.rootDir;
+			foreach(XmlNode n in xmld.SelectNodes("/root/instance/auth")) {
+				auth a = new auth();
+				a.path = String.Format("/{0}/", n.Attributes["url"].Value.ToString().Trim("\\/".ToCharArray()));
+				foreach(string t in n.Attributes["order"].Value.ToString().Split(',')) {
+					a.types.Add((AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), t, true));
+				}
+				foreach(XmlNode nu in xmld.SelectNodes("/root/instance/auth/user")) {
+					authUser tu = new authUser() {
+						name = nu.Attributes["name"].Value.ToString(),
+						password = nu.Attributes["password"].Value.ToString(),
+					};
+					try {
+						tu.forced = (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), nu.Attributes["force"].Value.ToString(), true);
+					} catch {}
+					a.users.Add(tu);
+				}
+				this.protectedDirs.Add(a);
+			}
 		}
 		
 		public void Looper() {
@@ -91,27 +110,27 @@ namespace DotHttpd {
 		
 		protected void cb(HttpListenerContext con) {
 			//Console.WriteLine("Request Trace ID: {0}", con.Request.RequestTraceIdentifier);
-			PassThru pt = new PassThru();
-			EngineResult s ;//= (System.IO.Stream)new System.IO.MemoryStream(0);
-			
+			EngineResult s = new EngineResult();//= (System.IO.Stream)new System.IO.MemoryStream(0);
 			System.IO.FileInfo f = Path.getABSPath(con.Request.RawUrl);
 			
 			try {
-				//Console.WriteLine("Attempting to use engine {0}|{1}...", f.Extension, this.plugins[f.Extension].GetType().Name);
-				s = this.plugins[f.Extension].run(con);
-			} catch {
-				Console.WriteLine("No luck, using default.");
-				s = this.plugins["*"].run(con);
-			}
-			
-			try {
-				Console.WriteLine("Content: {0}\r\nLength: {1}", con.Request.RawUrl, s.output.Length);
-				con.Response.StatusCode = s.ResponseCode;
-				con.Response.ContentLength64 = s.output.Length;
-				while(s.output.Position < s.output.Length) {
-					byte[] buf = new byte[1024];
-					int bRead = s.output.Read(buf, 0, buf.Length);
-					con.Response.OutputStream.Write(buf, 0, bRead);
+				
+				if(this.pathRequiresAuth(con.Request.RawUrl) != null && !this.validateAuth(con)) {
+					con.Response.StatusCode = 401;
+					
+				} else {
+					s = getPage(con);
+					//Console.WriteLine("Content: {0}\r\nLength: {1}", con.Request.RawUrl, s.output.Length);
+					con.Response.StatusCode = s.ResponseCode;
+					con.Response.ContentLength64 = s.output.Length;
+					if(s.ContentType != null) {
+						con.Response.ContentType = s.ContentType;
+					}
+					while(s.output.Position < s.output.Length) {
+						byte[] buf = new byte[1024];
+						int bRead = s.output.Read(buf, 0, buf.Length);
+						con.Response.OutputStream.Write(buf, 0, bRead);
+					}
 				}
 			} catch(Exception e) {
 				con.Response.StatusCode = 500;
@@ -130,8 +149,93 @@ namespace DotHttpd {
 			cb(con);
 		}
 		
+		protected EngineResult getErrorPage(int statusCode) {
+			if(statusCode >= 200 && statusCode < 300) {
+				//Console.WriteLine("wth?! why are you getting an error page for 2xx?!");
+				throw new Exception("wth?! why are you getting an error page for 2xx?!");
+			}
+			
+			string efile = String.Format(@".\errors\{0}.html", statusCode);
+			if(System.IO.File.Exists(efile)) {
+				return new EngineResult() {
+					output = (System.IO.Stream)new System.IO.FileStream(efile, System.IO.FileMode.Open, System.IO.FileAccess.Read),
+					ResponseCode = statusCode,
+					ContentType = "text/html"
+				};
+			}
+			//Console.WriteLine("Error code file not found, prolly should die somehow.");
+			throw new Exception("Error code file not found, prolly should die somehow.");
+		}
+		
+		protected EngineResult getPage(HttpListenerContext context) {
+			EngineResult s = new EngineResult();
+			System.IO.FileInfo f = Path.getABSPath(context.Request.RawUrl);
+			try {
+				
+				try {
+					s = this.plugins[f.Extension].run(context);
+				} catch {
+					s = this.plugins["*"].run(context);
+				}
+				if(!(s.ResponseCode >= 200 && s.ResponseCode < 300)) {
+					throw new Exception("invalid request.");
+				}
+			} catch(Exception e) {
+				//Console.WriteLine("error fetching {0} -- Code: {1}", f.FullName, s.ResponseCode);
+				//Console.WriteLine(e);
+				return this.getErrorPage(s.ResponseCode);
+			} finally {
+				//something?
+			}
+			return s;
+		}
+		
+		protected List<auth> protectedDirs = new List<auth>();
+		protected auth pathRequiresAuth(string RawUrl) {
+			foreach(auth s in this.protectedDirs) {
+				if(RawUrl.ToLower().StartsWith(s.path.ToLower())) {
+					return s;
+				}
+			}
+			
+			return null;
+		}
+		
+		protected bool userRequiresAuth(HttpListenerContext context) {
+			return pathRequiresAuth(context.Request.RawUrl) != null && context.Request.IsAuthenticated == false;
+		}
+		
+		protected bool validateAuth(HttpListenerContext context) {
+			//get target auth
+			//validate user creds
+			if(context.User.Identity.GetType().Equals(typeof(HttpListenerBasicIdentity))) {
+				HttpListenerBasicIdentity id = (HttpListenerBasicIdentity)context.User.Identity;
+				Console.WriteLine("username: {0} password: {1} isValid: {2}", id.Name, id.Password, pathRequiresAuth(context.Request.RawUrl).isValid(id));
+			
+				try {
+					return pathRequiresAuth(context.Request.RawUrl).isValid(id);
+				} catch {  }
+			}
+			
+			return false;
+		}
+		
+		protected AuthenticationSchemes checkAuth(HttpListenerRequest request) {
+			try {
+				return pathRequiresAuth(request.RawUrl).types_c;
+			} catch {
+				return AuthenticationSchemes.Anonymous;
+			}
+			if(request.RawUrl.StartsWith("/hidden/")) {
+				return AuthenticationSchemes.Negotiate | AuthenticationSchemes.Basic;
+			} else {
+				return AuthenticationSchemes.Anonymous;
+			}
+		}
+		
 		public void Start() {
 			this._listener.Start();
+			_listener.AuthenticationSchemeSelectorDelegate = new AuthenticationSchemeSelector(this.checkAuth);
 			this.t.Start();
 		}
 		
@@ -140,6 +244,43 @@ namespace DotHttpd {
 			this.t.Abort();
 		}
 	}
+	
+	#region auth
+	public class auth {
+		public string path;
+		public List<AuthenticationSchemes> types = new List<AuthenticationSchemes>();
+		public AuthenticationSchemes types_c {
+			get {
+				AuthenticationSchemes rtn = this.types[0];
+				foreach(AuthenticationSchemes t in this.types) {
+					rtn = rtn | t;
+				}
+				return rtn;
+			}
+		}
+		public bool isValid(HttpListenerBasicIdentity id) {
+			foreach(authUser a in this.users) {
+				if(a.name == id.Name &&
+					a.password == id.Password
+					) {
+					if(a.forced != null && a.forced == (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), id.AuthenticationType, true)) {
+						return (a.forced != null && a.forced == (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), id.AuthenticationType, true));
+					}
+					return true;
+				}
+			}
+			return false;
+		}
+		public List<authUser> users = new List<authUser>();
+	}
+	
+	public class authUser {
+		public string name;
+		public string password;
+		public AuthenticationSchemes forced;
+	}
+	
+	#endregion
 	
 	#region tools
 	
@@ -186,7 +327,8 @@ namespace DotHttpd {
 	
 	public class EngineResult {
 		public System.IO.Stream output = (System.IO.Stream)new System.IO.MemoryStream(0);
-		public int ResponseCode = 200;
+		public int ResponseCode = 0;
+		public string ContentType = null;
 	}
 	
 	///<Summary>
@@ -256,7 +398,7 @@ namespace DotHttpd {
 		string rootDir = @"";
 		//HttpListenerResponse nresponse;
 		public EngineResult run(HttpListenerContext context) {
-			Console.WriteLine(context.Request.RawUrl);
+			//Console.WriteLine(context.Request.RawUrl);
 			//this.nresponse = context.Response;
 			/*string fp = context.Request.RawUrl;
 			if(fp.Contains("?")) {

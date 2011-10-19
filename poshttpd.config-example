@@ -5,6 +5,10 @@
 		<rootDir val="c:\poshsite" />
 		<alias url="/test" dir="c:\poshsite\some\other\dir" />
 		<opt key="DefaultFile" val="index.ps1" />
+		<auth url="/hidden/" order="basic, ntlm">
+			<user name="user" password="afag2149t1gmn" force="basic" />
+			<user name="asgda" password="qga" force="basic" />
+		</auth>
 	</instance>
 	<engines>
 		<!--These are always assumed to be enabled.

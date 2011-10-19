@@ -1,0 +1,8 @@
+=0.0.1.2 commit 1=
+*Reworked page serving to handle errors like 404.
+**If this fails, gives 500 error.
+*Added \errors directory which holds default static error pages.
+*Added "ContentType" to EngineResult to force content type.
+*Added Authentication
+**Support for basic with NTLM in the works.
+**Might work with other AuthenticationSchemes, but is untested and will likely remain so.
