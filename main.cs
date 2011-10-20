@@ -37,6 +37,7 @@ namespace DotHttpd {
 		List<IAsyncResult> async = new List<IAsyncResult>();
 		
 		public Dictionary<string, IEngine> plugins = new Dictionary<string,IEngine>();
+		public Dictionary<string, object> options = new Dictionary<string,object>();
 		
 		public BG() {
 			this._listener.Prefixes.Add(this.prefix);
@@ -52,6 +53,8 @@ namespace DotHttpd {
 			this.prefix = xmld.SelectSingleNode("/root/instance/prefix").Attributes["val"].Value.ToString();
 			this.rootDir = xmld.SelectSingleNode("/root/instance/rootDir").Attributes["val"].Value.ToString();
 			Path.rootDir = this.rootDir;
+			
+			#region auth config
 			foreach(XmlNode n in xmld.SelectNodes("/root/instance/auth")) {
 				auth a = new auth();
 				a.path = String.Format("/{0}/", n.Attributes["url"].Value.ToString().Trim("\\/".ToCharArray()));
@@ -71,6 +74,13 @@ namespace DotHttpd {
 				}
 				this.protectedDirs.Add(a);
 			}
+			#endregion
+			
+			#region default files
+			this.options["defaultFiles"] = new List<string>();
+			((List<string>)this.options["defaultFiles"]).AddRange(xmld.SelectSingleNode("/root/instance/opt").Attributes["val"].Value.ToString().Split(';'));
+			Path.defaultFiles["/"] = (List<string>)this.options["defaultFiles"];
+			#endregion
 		}
 		
 		public void Looper() {
@@ -112,7 +122,7 @@ namespace DotHttpd {
 		protected void cb(HttpListenerContext con) {
 			//Console.WriteLine("Request Trace ID: {0}", con.Request.RequestTraceIdentifier);
 			EngineResult s = new EngineResult();//= (System.IO.Stream)new System.IO.MemoryStream(0);
-			System.IO.FileInfo f = Path.getABSPath(con.Request.RawUrl);
+			System.IO.FileInfo f = Path.getABSPath(con.Request.Url);
 			
 			try {
 				
@@ -170,7 +180,7 @@ namespace DotHttpd {
 		
 		protected EngineResult getPage(HttpListenerContext context) {
 			EngineResult s = new EngineResult();
-			System.IO.FileInfo f = Path.getABSPath(context.Request.RawUrl);
+			System.IO.FileInfo f = Path.getABSPath(context.Request.Url);
 			try {
 				
 				try {
@@ -295,25 +305,40 @@ namespace DotHttpd {
 	
 	#region tools
 	
-	//TODO: rewrite some of this using http://msdn.microsoft.com/en-us/library/system.uri.localpath.aspx as a base.
+	//TODO: Make this instance instead of static.
 	class Path {
 		public static string rootDir = "";
+		public static Dictionary<string, List<string>> defaultFiles = new Dictionary<string,List<string>>();
 		
-		static System.IO.FileInfo getPath(string RawUrl) {
-			string fp = RawUrl;
+		static System.IO.FileInfo getPath(Uri url) {
+			/*string fp = RawUrl;
 			if(fp.Contains("?")) {
 				fp = fp.Substring(0, fp.IndexOf("?"));
-			}
-			
+			}*/
+			string fp = url.AbsolutePath;
 			return new System.IO.FileInfo(fp);
 		}
-		public static System.IO.FileInfo getABSPath(string RawUrl) {
-			string fp = RawUrl;
+		public static System.IO.FileInfo getABSPath(Uri url) {
+			/*string fp = RawUrl;
 			if(fp.Contains("?")) {
 				fp = fp.Substring(0, fp.IndexOf("?"));
+			}*/
+			
+			string fp = url.AbsolutePath;
+			string tfp = System.IO.Path.Combine(new string[] {Path.rootDir, fp.TrimStart("\\/".ToCharArray())});
+			if(fp.EndsWith("/") || System.IO.Directory.Exists(tfp)) {
+				//test for default files.
+				foreach(KeyValuePair<string, List<string>> ap in Path.defaultFiles.Where(f => fp.StartsWith(f.Key)).ToArray()) {
+					foreach(string d in ap.Value) {
+						if(System.IO.File.Exists(System.IO.Path.Combine(new string[] {Path.rootDir, fp.TrimStart("\\/".ToCharArray()), d}))) {
+							tfp = System.IO.Path.Combine(new string[] {Path.rootDir, fp.TrimStart("\\/".ToCharArray()), d});
+							break;
+						}
+					}
+				}
 			}
 			
-			return new System.IO.FileInfo(System.IO.Path.Combine(new string[] {Path.rootDir, fp.TrimStart("\\/".ToCharArray())}));
+			return new System.IO.FileInfo(tfp); //new System.IO.FileInfo(System.IO.Path.Combine(new string[] {Path.rootDir, fp.TrimStart("\\/".ToCharArray())}));
 		}
 	}
 	
@@ -352,7 +377,7 @@ namespace DotHttpd {
 			try {
 				PowerShell shell = PowerShell.Create();
 				
-				shell.AddCommand(Path.getABSPath(context.Request.RawUrl).FullName);
+				shell.AddCommand(Path.getABSPath(context.Request.Url).FullName);
 				
 				//doesn't work.
 				//HttpListenerResponseClone tmp = new HttpListenerResponseClone(context.Response);
@@ -416,7 +441,7 @@ namespace DotHttpd {
 				fp = fp.Substring(0, fp.IndexOf("?"));
 			}*/
 			
-			string absfp = Path.getABSPath(context.Request.RawUrl).FullName; //System.IO.Path.Combine(new string[] { this.rootDir, fp.Trim('/') });
+			string absfp = Path.getABSPath(context.Request.Url).FullName; //System.IO.Path.Combine(new string[] { this.rootDir, fp.Trim('/') });
 			//Console.WriteLine("Checking {0}", absfp);
 			if(System.IO.File.Exists(absfp)) {
 				try {
