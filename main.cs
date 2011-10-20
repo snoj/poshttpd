@@ -58,7 +58,7 @@ namespace DotHttpd {
 				foreach(string t in n.Attributes["order"].Value.ToString().Split(',')) {
 					a.types.Add((AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), t, true));
 				}
-				foreach(XmlNode nu in xmld.SelectNodes("/root/instance/auth/user")) {
+				foreach(XmlNode nu in n.SelectNodes("./user")) {
 					authUser tu = new authUser() {
 						name = nu.Attributes["name"].Value.ToString(),
 						password = nu.Attributes["password"].Value.ToString(),
@@ -66,6 +66,7 @@ namespace DotHttpd {
 					try {
 						tu.forced = (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), nu.Attributes["force"].Value.ToString(), true);
 					} catch {}
+					
 					a.users.Add(tu);
 				}
 				this.protectedDirs.Add(a);
@@ -117,7 +118,6 @@ namespace DotHttpd {
 				
 				if(this.pathRequiresAuth(con.Request.RawUrl) != null && !this.validateAuth(con)) {
 					con.Response.StatusCode = 401;
-					
 				} else {
 					s = getPage(con);
 					//Console.WriteLine("Content: {0}\r\nLength: {1}", con.Request.RawUrl, s.output.Length);
@@ -137,7 +137,8 @@ namespace DotHttpd {
 				//Console.WriteLine(e);
 			}
 			finally {
-				Console.WriteLine("{0} - - [{1}] {2} {3} {4}", con.Request.RemoteEndPoint.ToString(), DateTime.Now, con.Response.StatusCode, con.Request.HttpMethod, con.Request.RawUrl);
+				var username = (con.User != null)?con.User.Identity.Name:"";
+				Console.WriteLine("{0} - {1} - [{2}] {3} {4} {5}", con.Request.RemoteEndPoint.ToString(), username, DateTime.Now, con.Response.StatusCode, con.Request.HttpMethod, con.Request.RawUrl);
 				s.output.Close();
 				con.Response.Close();
 				
@@ -208,14 +209,13 @@ namespace DotHttpd {
 		protected bool validateAuth(HttpListenerContext context) {
 			//get target auth
 			//validate user creds
-			if(context.User.Identity.GetType().Equals(typeof(HttpListenerBasicIdentity))) {
-				HttpListenerBasicIdentity id = (HttpListenerBasicIdentity)context.User.Identity;
-				Console.WriteLine("username: {0} password: {1} isValid: {2}", id.Name, id.Password, pathRequiresAuth(context.Request.RawUrl).isValid(id));
 			
-				try {
-					return pathRequiresAuth(context.Request.RawUrl).isValid(id);
-				} catch {  }
-			}
+			//HttpListenerBasicIdentity id = (HttpListenerBasicIdentity)context.User.Identity;
+			//Console.WriteLine("username: {0} password: {1} isValid: {2}", id.Name, id.Password, pathRequiresAuth(context.Request.RawUrl).isValid(id));
+		
+			try {
+				return pathRequiresAuth(context.Request.RawUrl).isValid(context.User.Identity);
+			} catch {  }
 			
 			return false;
 		}
@@ -226,11 +226,7 @@ namespace DotHttpd {
 			} catch {
 				return AuthenticationSchemes.Anonymous;
 			}
-			if(request.RawUrl.StartsWith("/hidden/")) {
-				return AuthenticationSchemes.Negotiate | AuthenticationSchemes.Basic;
-			} else {
-				return AuthenticationSchemes.Anonymous;
-			}
+			
 		}
 		
 		public void Start() {
@@ -258,16 +254,31 @@ namespace DotHttpd {
 				return rtn;
 			}
 		}
-		public bool isValid(HttpListenerBasicIdentity id) {
-			foreach(authUser a in this.users) {
-				if(a.name == id.Name &&
-					a.password == id.Password
-					) {
-					if(a.forced != null && a.forced == (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), id.AuthenticationType, true)) {
-						return (a.forced != null && a.forced == (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), id.AuthenticationType, true));
+		
+		public bool isValid(System.Security.Principal.IIdentity id) {
+			switch(id.GetType().FullName) {
+				case "System.Net.HttpListenerBasicIdentity":
+					HttpListenerBasicIdentity id2 = (HttpListenerBasicIdentity)id;
+					foreach(authUser a in this.users) {
+						if(a.name == id2.Name &&
+							a.password == id2.Password
+							) {
+							if(a.forced != null && a.forced == (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), id2.AuthenticationType, true)) {
+								return (a.forced != null && a.forced == (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), id2.AuthenticationType, true));
+							}
+							return true;
+						}
 					}
-					return true;
-				}
+					break;
+				case "System.Security.Principal.WindowsIdentity":
+					System.Security.Principal.WindowsIdentity wid = (System.Security.Principal.WindowsIdentity)id;
+										
+					if(this.users.Count(f => f.forced != null && f.forced == AuthenticationSchemes.Ntlm) > 0) {
+						return this.users.Where(f => f.name.ToLower() == wid.Name.ToLower() && ((f.forced == null)?true:f.forced == (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), wid.AuthenticationType, true))).Count() > 0 && wid.IsAuthenticated;
+					} else {
+						return wid.IsAuthenticated;
+					}
+					break;
 			}
 			return false;
 		}
