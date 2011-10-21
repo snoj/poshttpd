@@ -126,8 +126,10 @@ namespace DotHttpd {
 			
 			try {
 				
+				//TODO: rewrite this to make use of authAttempts to forbid access.
 				if(this.pathRequiresAuth(con.Request.RawUrl) != null && !this.validateAuth(con)) {
 					con.Response.StatusCode = 401;
+					this.authAttempts.Add(new authAttempt(con.Request));
 				} else {
 					s = getPage(con);
 					//Console.WriteLine("Content: {0}\r\nLength: {1}", con.Request.RawUrl, s.output.Length);
@@ -199,6 +201,19 @@ namespace DotHttpd {
 				//something?
 			}
 			return s;
+		}
+		
+		protected List<authAttempt> authAttempts = new List<authAttempt>();
+		
+		protected void cleanAuthAttempts() {
+			try {
+				List<authAttempt> t = this.authAttempts.Where(f => f.timestamp < DateTime.Now.AddMinutes(-10)).ToList();
+				
+				lock(this) {
+					this.authAttempts = t;
+				}
+			} catch {}
+			
 		}
 		
 		protected List<auth> protectedDirs = new List<auth>();
@@ -299,6 +314,17 @@ namespace DotHttpd {
 		public string name;
 		public string password;
 		public AuthenticationSchemes forced;
+	}
+	
+	public class authAttempt {
+		public DateTime timestamp;
+		public Guid requestTrace;
+		public IPEndPoint remote;
+		public authAttempt(HttpListenerRequest request) {
+			this.timestamp = DateTime.Now;
+			this.requestTrace = request.RequestTraceIdentifier;
+			this.remote = (IPEndPoint)request.RemoteEndPoint;
+		}
 	}
 	
 	#endregion
