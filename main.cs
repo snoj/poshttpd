@@ -100,6 +100,7 @@ namespace DotHttpd {
 				async.AddRange(tmp);
 				#endregion
 				
+				//this.cleanAuthAttempts();
 				
 				HLState state = new HLState();
 				//Console.WriteLine("creating HLState.ID: {0}", state.ID);
@@ -125,11 +126,18 @@ namespace DotHttpd {
 			System.IO.FileInfo f = Path.getABSPath(con.Request.Url);
 			
 			try {
-				
+				Console.WriteLine((con.User != null)?con.User.Identity.Name:"no user");
 				//TODO: rewrite this to make use of authAttempts to forbid access.
 				if(this.pathRequiresAuth(con.Request.RawUrl) != null && !this.validateAuth(con)) {
 					con.Response.StatusCode = 401;
-					this.authAttempts.Add(new authAttempt(con.Request));
+					
+					if(this.authAttempts.Count(aa => aa.requestTrace == con.Request.RequestTraceIdentifier) > 3) {
+						con.Response.StatusCode = 403;
+					} else {
+						this.authAttempts.Add(new authAttempt(con));
+					}
+					Console.WriteLine("{0} error for {1}", con.Response.StatusCode, con.Request.RequestTraceIdentifier);
+					s = getErrorPage(con.Response.StatusCode);
 				} else {
 					s = getPage(con);
 					//Console.WriteLine("Content: {0}\r\nLength: {1}", con.Request.RawUrl, s.output.Length);
@@ -146,7 +154,7 @@ namespace DotHttpd {
 				}
 			} catch(Exception e) {
 				con.Response.StatusCode = 500;
-				//Console.WriteLine(e);
+				Console.WriteLine(e);
 			}
 			finally {
 				var username = (con.User != null)?con.User.Identity.Name:"";
@@ -320,10 +328,24 @@ namespace DotHttpd {
 		public DateTime timestamp;
 		public Guid requestTrace;
 		public IPEndPoint remote;
-		public authAttempt(HttpListenerRequest request) {
+		
+		/*public List<AuthenticationSchemes> types = new List<AuthenticationSchemes>();
+		public AuthenticationSchemes types_c {
+			get {
+				AuthenticationSchemes rtn = this.types[0];
+				foreach(AuthenticationSchemes t in this.types) {
+					rtn = rtn | t;
+				}
+				return rtn;
+			}
+		}*/
+		public AuthenticationSchemes type = AuthenticationSchemes.Anonymous;
+		
+		public authAttempt(HttpListenerContext con) {
 			this.timestamp = DateTime.Now;
-			this.requestTrace = request.RequestTraceIdentifier;
-			this.remote = (IPEndPoint)request.RemoteEndPoint;
+			this.requestTrace = con.Request.RequestTraceIdentifier;
+			this.remote = (IPEndPoint)con.Request.RemoteEndPoint;
+			this.type = (AuthenticationSchemes)Enum.Parse(typeof(AuthenticationSchemes), con.User.Identity.AuthenticationType, true);
 		}
 	}
 	
